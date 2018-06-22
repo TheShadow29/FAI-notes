@@ -8,5 +8,5 @@ Also those who have seen the lectures might find few interesting things from the
 - [ ] Quick Introduction to FAI
 - [x] Using Cadence Model
 - [ ] Creating your own model
-- [ ] Using Visdom with FAI
+- [x] Using Visdom with FAI
 - [ ] Logging with FAI
