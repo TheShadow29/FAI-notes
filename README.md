@@ -10,3 +10,5 @@ Also those who have seen the lectures might find few interesting things from the
 - [ ] Creating your own model
 - [x] Using Visdom with FAI
 - [ ] Logging with FAI
+- [ ] Using forward hooks for feature extraction
+- [ ] Using backward hooks for unit testing
