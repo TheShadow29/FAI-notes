@@ -12,3 +12,7 @@ Also those who have seen the lectures might find few interesting things from the
 - [ ] Logging with FAI
 - [ ] Using forward hooks for feature extraction
 - [ ] Using backward hooks for unit testing
+- [ ] Creating own DataSet for Siamese
+- [ ] Using Different number of inputs for the model using ColumnarModelData
+- [ ] Appending a New Feature With CNN
+
