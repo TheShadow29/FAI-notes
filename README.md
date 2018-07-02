@@ -11,7 +11,8 @@ Also those who have seen the lectures might find few interesting things from the
 - [x] Using Visdom with FAI
 - [ ] Logging with FAI
 - [x] Using forward hooks for feature extraction
-- [ ] Using CAM for visualization
+- [x] Using CAM for visualization
+- [ ] Using Grad-CAM for visualization
 - [ ] Using backward hooks for unit testing
 - [ ] Creating own DataSet for Siamese
 - [ ] Using Different number of inputs for the model using ColumnarModelData
