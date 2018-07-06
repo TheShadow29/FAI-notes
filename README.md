@@ -17,3 +17,4 @@ Also those who have seen the lectures might find few interesting things from the
 - [ ] Creating own DataSet for Siamese
 - [ ] Using Different number of inputs for the model using ColumnarModelData
 - [ ] Appending a New Feature with CNN features
+- [ ] Using Sampler for Class Imbalance
