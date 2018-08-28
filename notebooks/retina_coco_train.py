@@ -184,7 +184,7 @@ class classf_model(nn.Module):
                                       kernel_size=3, padding=1)
         initialize_vals(self.cls_modl)
 
-        prior = 0.01
+        prior = 0.001
         self.out_cls_modl.bias.data.fill_(-np.log((1.0 - prior)/prior))
 
     def forward(self, inp):
@@ -423,11 +423,12 @@ learn.opt_fn = SGD_Momentum(0.9)
 # learn.metrics = [coco_metrics, loc_loss, cls_loss]
 learn.metrics = [loc_loss, cls_loss]
 # learn.load('retina_first_try1')
+learn.load('retina_new_actv1')
 # learn.unfreeze()
 lr = 1e-1
-# lrs = np.array([lr/125, lr/25, lr/5, lr])
+lrs = np.array([lr/1e4, lr/1e3, lr/1e2, lr])
 # learn.fit(lrs, 1, cycle_len=10, best_save_name='retina_new_actv1', callbacks=[vcb])
-learn.fit(lr, 1, cycle_len=10, best_save_name='retina_new_actv1', callbacks=[vcb])
+learn.fit(lrs, 1, cycle_len=1, use_clr=(32, 10), best_save_name='retina_new_actv2', callbacks=[vcb])
 # learn.freeze_to(-2)
 # lrs = np.array([lr/5, lr])
 # learn.fit(lrs, 1, cycle_len=5, use_clr=(32, 10), best_save_name='retina_new_actv1', callbacks=[vcb])
