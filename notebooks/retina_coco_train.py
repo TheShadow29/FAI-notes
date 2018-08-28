@@ -1,7 +1,10 @@
+import matplotlib
+matplotlib.use('Agg')
 from fastai.conv_learner import *
 from matplotlib import patches, patheffects
 from collections import defaultdict
 from pycocotools.cocoeval import COCOeval
+import visdom
 
 coco_path = Path('/scratch/arka/Ark_git_files/coco/')
 ann_path = coco_path / 'annotations'
@@ -39,7 +42,7 @@ class ConcatLblDataset(Dataset):
         self.ds,self.y2 = ds,y2
         self.sz = ds.sz
     def __len__(self): return len(self.ds)
-    
+
     def __getitem__(self, i):
         x,y = self.ds[i]
         return (x, (y,self.y2[i]))
@@ -97,33 +100,33 @@ def pad_out(k):
 class FPN_backbone(nn.Module):
     def __init__(self, inch_list):
         super().__init__()
-        
+
 #         self.backbone = backbone
-        
+
         # expects c3, c4, c5 channel dims
         self.inch_list = inch_list
         self.feat_size = 256
         self.p7_gen = nn.Conv2d(in_channels=self.feat_size, out_channels=self.feat_size, stride=2, kernel_size=3,
                                padding=1)
-        self.p6_gen = nn.Conv2d(in_channels=self.inch_list[2], 
+        self.p6_gen = nn.Conv2d(in_channels=self.inch_list[2],
                             out_channels=self.feat_size, kernel_size=3, stride=2, padding=pad_out(3))
-        self.p5_gen1 = nn.Conv2d(in_channels=self.inch_list[2], 
+        self.p5_gen1 = nn.Conv2d(in_channels=self.inch_list[2],
                                  out_channels=self.feat_size, kernel_size=1, padding=pad_out(1))
 #         self.p5_gen2 = nn.Upsample(scale_factor=2, mode='nearest')
         self.p5_gen3 = nn.Conv2d(in_channels=self.feat_size, out_channels=self.feat_size,
                                 kernel_size=3, padding=pad_out(3))
-        
+
         self.p4_gen1 = nn.Conv2d(in_channels=self.inch_list[1], out_channels=self.feat_size, kernel_size=1,
                                 padding=pad_out(1))
 #         self.p4_gen2 = nn.Upsample(scale_factor=2, mode='nearest')
-        self.p4_gen3 = nn.Conv2d(in_channels=self.feat_size, out_channels=self.feat_size, kernel_size=3, 
+        self.p4_gen3 = nn.Conv2d(in_channels=self.feat_size, out_channels=self.feat_size, kernel_size=3,
                                 padding=pad_out(3))
-        
+
         self.p3_gen1 = nn.Conv2d(in_channels=self.inch_list[0], out_channels=self.feat_size, kernel_size=1,
                                 padding=pad_out(1))
         self.p3_gen2 = nn.Conv2d(in_channels=self.feat_size, out_channels=self.feat_size, kernel_size=3,
                                 padding=pad_out(3))
-        
+
     def forward(self, inp):
         # expects inp to be output of c3, c4, c5
         c3 = inp[0]
@@ -131,26 +134,27 @@ class FPN_backbone(nn.Module):
         c5 = inp[2]
         p51 = self.p5_gen1(c5)
         p5_out = self.p5_gen3(p51)
-        
+
 #         p5_up = self.p5_gen2(p51)
         p5_up = F.interpolate(p51, scale_factor=2)
         p41 = self.p4_gen1(c4) + p5_up
         p4_out = self.p4_gen3(p41)
-        
+
 #         p4_up = self.p4_gen2(p41)
         p4_up = F.interpolate(p41, scale_factor=2)
         p31 = self.p3_gen1(c3) + p4_up
         p3_out = self.p3_gen2(p31)
-        
+
         p6_out = self.p6_gen(c5)
-        
+
         p7_out = self.p7_gen(F.relu(p6_out))
-        
+
         return [p3_out, p4_out, p5_out, p6_out, p7_out]
-        
+
 def flatten_conv(x,k):
     bs,nf,gx,gy = x.size()
     x = x.permute(0,2,3,1).contiguous()
+    # x = x.permute(0, 3, 2, 1).contiguous()
     return x.view(bs,-1,nf//k)
 
 def initialize_vals(mdl):
@@ -169,17 +173,26 @@ class classf_model(nn.Module):
         self.na = na
         self.nc = nc
         self.feat_size = fs
+        # Adding Relu after each conv
         self.cls_modl = nn.Sequential(*nn.ModuleList([nn.Conv2d(in_channels=self.feat_size,
                                                                            out_channels=self.feat_size,
-                                                                           kernel_size=3, padding=1)]*4),
-                                                  nn.Conv2d(in_channels=self.feat_size,
-                                                            out_channels=self.na * self.nc,
-                                                            kernel_size=3, padding=1))
+                                                                           kernel_size=3, padding=1),
+                                                      nn.ReLU()]*4))
+
+        self.out_cls_modl = nn.Conv2d(in_channels=self.feat_size,
+                                      out_channels=self.na * self.nc,
+                                      kernel_size=3, padding=1)
         initialize_vals(self.cls_modl)
+
+        prior = 0.01
+        self.out_cls_modl.bias.data.fill_(-np.log((1.0 - prior)/prior))
+
     def forward(self, inp):
 #         import pdb; pdb.set_trace();
+        # Adding a sigmoid layer
         out = self.cls_modl(inp)
-        out2 = flatten_conv(out, self.na)
+        out1 = torch.sigmoid(self.out_cls_modl(out))
+        out2 = flatten_conv(out1, self.na)
         return out2
 
 class regress_model(nn.Module):
@@ -188,9 +201,11 @@ class regress_model(nn.Module):
         self.na = na
         self.nc = nc
         self.feat_size = fs
+        # Adding Relu after each conv
         self.reg_model = nn.Sequential(*nn.ModuleList([nn.Conv2d(in_channels=self.feat_size,
                                                                            out_channels=self.feat_size,
-                                                                           kernel_size=3, padding=1)]*4),
+                                                                           kernel_size=3, padding=1),
+                                                       nn.ReLU()]*4),
                                                   nn.Conv2d(in_channels=self.feat_size,
                                                             out_channels=self.na * 4,
                                                             kernel_size=3, padding=1))
@@ -199,13 +214,13 @@ class regress_model(nn.Module):
         out = self.reg_model(inp)
         out2 = flatten_conv(out, self.na)
         return out2
-    
-    
+
+
 class retina_net_model(nn.Module):
     def __init__(self, resnet_model, na=9, nc=81):
         super().__init__()
         self.res_backbone = resnet_model
-        self.fpn_sizes = [self.res_backbone.layer2[-1].conv3.out_channels, 
+        self.fpn_sizes = [self.res_backbone.layer2[-1].conv3.out_channels,
                           self.res_backbone.layer3[-1].conv3.out_channels,
                           self.res_backbone.layer4[-1].conv3.out_channels]
         self.feat_size = 256
@@ -214,8 +229,8 @@ class retina_net_model(nn.Module):
         self.fpn = FPN_backbone(self.fpn_sizes)
         self.cls_model = classf_model(self.feat_size, self.num_anch, self.num_class)
         self.reg_model = regress_model(self.feat_size, self.num_anch, self.num_class)
-        
-        
+
+
     def forward(self, inp):
         x = self.res_backbone.conv1(inp)
         x = self.res_backbone.bn1(x)
@@ -233,10 +248,10 @@ class retina_net_model(nn.Module):
         for p in features:
             out_cls.append(self.cls_model(p))
             out_bbx.append(self.reg_model(p))
-        
+
         return [torch.cat(out_cls, dim=1),
                 torch.cat(out_bbx, dim=1)]
-    
+
 def one_hot_embedding(labels, num_classes):
     return torch.eye(num_classes)[labels.data.cpu()]
 
@@ -251,19 +266,20 @@ class BCE_Loss(nn.Module):
         t = V(t[:,:-1].contiguous())#.cpu()
         x = pred[:,:-1]
         w = self.get_weight(x,t)
-        return F.binary_cross_entropy_with_logits(x, t, w, reduction='element_wise_mean')/self.num_classes
-    
+        return F.binary_cross_entropy_with_logits(x, t, w, reduction='element_wise_mean')
+
     def get_weight(self,x,t): return None
-    
+
 class FocalLoss(BCE_Loss):
-    def get_weight(self,x,t):
-        alpha,gamma = 0.25,1
-        p = x.sigmoid()
+    def get_weight(self, x, t):
+        alpha, gamma = 0.25, 1
+        # p = x.sigmoid()
+        p = x
         pt = p*t + (1-p)*(1-t)
         w = alpha*t + (1-alpha)*(1-t)
         return w * (1-pt).pow(gamma)
 
-    
+
 def intersect(box_a, box_b):
     max_xy = torch.min(box_a[:, None, 2:], box_b[None, :, 2:])
     min_xy = torch.max(box_a[:, None, :2], box_b[None, :, :2])
@@ -306,7 +322,11 @@ loss_f = FocalLoss(len(id2cat))
 
 def ssd_1_loss(b_c,b_bb,bbox,clas,print_it=False):
 #     import pdb; pdb.set_trace()
-    bbox,clas = get_y(bbox,clas)
+    try:
+        bbox,clas = get_y(bbox,clas)
+    except:
+        # print('pain')
+        return 0, 0
     a_ic = actn_to_bb(b_bb, anchors)
     overlaps = jaccard(bbox.data, anchor_cnr.data)
     gt_overlap,gt_idx = map_to_ground_truth(overlaps,print_it)
@@ -316,7 +336,7 @@ def ssd_1_loss(b_c,b_bb,bbox,clas,print_it=False):
     gt_clas[1-pos] = len(id2cat)
     gt_bbox = bbox[gt_idx]
     loc_loss = ((a_ic[pos_idx] - gt_bbox[pos_idx]).abs()).mean()
-    clas_loss  = loss_f(b_c, gt_clas)
+    clas_loss  = loss_f(b_c, gt_clas) / len(pos_idx)
     return loc_loss, clas_loss
 
 def ssd_loss(pred,targ,print_it=False):
@@ -325,7 +345,7 @@ def ssd_loss(pred,targ,print_it=False):
         loc_loss,clas_loss = ssd_1_loss(b_c,b_bb,bbox,clas,print_it)
         lls += loc_loss
         lcs += clas_loss
-#     if print_it: 
+#     if print_it:
 #     print(f'loc: {lls.data[0]}, clas: {lcs.data[0]}')
     return lls+lcs
 
@@ -337,10 +357,77 @@ def coco_metrics(preds, targs):
         lcs += clas_loss
     return to_np(lls + lcs)
 
+def loc_loss(preds, targs):
+    lcs,lls = 0.,0.
+    for b_c,b_bb,bbox,clas in zip(*preds,*targs):
+        loc_loss,clas_loss = ssd_1_loss(b_c,b_bb,bbox,clas,False)
+        lls += loc_loss
+        lcs += clas_loss
+    return lls
+
+def cls_loss(preds, targs):
+    lcs,lls = 0.,0.
+    for b_c,b_bb,bbox,clas in zip(*preds,*targs):
+        loc_loss,clas_loss = ssd_1_loss(b_c,b_bb,bbox,clas,False)
+        lls += loc_loss
+        lcs += clas_loss
+    return lcs
+
+
+class VisdomLinePlotter(object):
+    def __init__(self, env='main', port=6009):
+        self.vis = visdom.Visdom(port=port)
+        self.env = env
+        self.plots = dict()
+
+    def plot(self, window_name, var_name, x, y, xlabel='Epochs', ylabel='Loss'):
+        if window_name not in self.plots:
+            self.plots[window_name] = self.vis.line(X=np.array([x]), Y=np.array([y]),
+                                                    env=self.env, opts=dict(
+                                                        legend=[var_name],
+                                                        title=window_name,
+                                                        xlabel=xlabel,
+                                                        ylabel=ylabel))
+        else:
+            self.vis.line(X=np.array([x]), Y=np.array([y]), env=self.env,
+                          win=self.plots[window_name], name=var_name, update='append')
+
+
+class visdom_callback(Callback):
+    def __init__(self, plotter, freq=100):
+        self.plotter = plotter
+        self.num_epochs=0
+        self.num_batches=0
+        self.freq = freq
+
+    def on_batch_end(self, los):
+        if self.num_batches % self.freq == 0:
+            self.deb_loss = los
+            self.plotter.plot('train', 'train_loss', self.num_batches,
+                              self.deb_loss, xlabel='Batches', ylabel='Training Loss')
+        self.num_batches+=1
+
+
+plotter = VisdomLinePlotter()
+vcb = visdom_callback(plotter, freq=10)
+
+
+
 retina_model = retina_net_model(res50, k, n_clas)
 
 learn = ConvLearner.from_model_data(retina_model, md)
 learn.crit = ssd_loss
-learn.opt_fn = optim.Adam
-learn.metrics = [coco_metrics]
-learn.fit(1e-3, 1, cycle_len=10, best_save_name='retina_first_try')
+# learn.opt_fn = optim.Adam
+# optim.SGD(
+learn.opt_fn = SGD_Momentum(0.9)
+# learn.metrics = [coco_metrics, loc_loss, cls_loss]
+learn.metrics = [loc_loss, cls_loss]
+# learn.load('retina_first_try1')
+# learn.unfreeze()
+lr = 1e-1
+# lrs = np.array([lr/125, lr/25, lr/5, lr])
+# learn.fit(lrs, 1, cycle_len=10, best_save_name='retina_new_actv1', callbacks=[vcb])
+learn.fit(lr, 1, cycle_len=10, best_save_name='retina_new_actv1', callbacks=[vcb])
+# learn.freeze_to(-2)
+# lrs = np.array([lr/5, lr])
+# learn.fit(lrs, 1, cycle_len=5, use_clr=(32, 10), best_save_name='retina_new_actv1', callbacks=[vcb])
